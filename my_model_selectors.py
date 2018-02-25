@@ -1,12 +1,13 @@
+import logging
 import math
 import statistics
 import warnings
-
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
 from sklearn.model_selection import KFold
 from asl_utils import combine_sequences
 
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 class ModelSelector(object):
     '''
@@ -27,6 +28,7 @@ class ModelSelector(object):
         self.max_n_components = max_n_components
         self.random_state = random_state
         self.verbose = verbose
+        self.base_model_scores = None  # used by SelectorDIC.setup to optimize scoring
 
     def select(self):
         raise NotImplementedError
@@ -75,9 +77,28 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        #logging.debug("word:{}".format(self.this_word))
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        # we want a lower BIC value
+        best_bic = 9999999
+        best_num_states = 3
+
+        for p in range(self.min_n_components, self.max_n_components):
+            try:
+                model = self.base_model(p)
+                log_l = model.score(self.X, self.lengths)
+                log_n = math.log(len(self.X))
+                bic = -2 * log_l + p * log_n
+                # logging.debug("word:{}, p:{}, bic: {:.2f}".format(self.this_word, p, bic))
+                if bic < best_bic:
+                    best_bic = bic
+                    best_num_states = p
+            except (ValueError, AttributeError):
+                pass
+
+        #logging.debug("best: {}".format(best_bic))
+        #self.verbose = True
+        return self.base_model(best_num_states)
 
 
 class SelectorDIC(ModelSelector):
@@ -89,13 +110,33 @@ class SelectorDIC(ModelSelector):
     https://pdfs.semanticscholar.org/ed3d/7c4a5f607201f3848d4c02dd9ba17c791fc2.pdf
     DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
     '''
+    def setup(self, scores):
+        self.base_model_scores = scores
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        #logging.debug("word:{}".format(self.this_word))
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        # we want a higher DIC value: difference between log_l for this word and the average log_l for all words
+        best_score = -9999999
+        best_num_states = 3
+        regularizer = 1 / (len(self.words) - 1)
 
+        for p in range(self.min_n_components, self.max_n_components):
+            try:
+                base_log_l = self.base_model_scores[p][self.this_word]
+
+                # subtract the base model score for this word from the sum of log likelihoods
+                sum_of_log = self.base_model_scores[p]["sum"] - base_log_l
+                dic = base_log_l - regularizer * sum_of_log
+                if dic > best_score:
+                    best_score = dic
+            except (KeyError, TypeError):
+                continue
+
+        # logging.debug("best: {}".format(best_score))
+        # self.verbose = True
+        return self.base_model(best_num_states)
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
@@ -104,6 +145,51 @@ class SelectorCV(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        #logging.debug("word:{}".format(self.this_word))
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        # we want a higher likelihood
+        best_score = -999999
+        best_num_states = 3
+        # k-fold requires at least one train/test split by setting n_splits=2 or more
+        n_splits = min(3, len(self.lengths))
+        if n_splits >= 2:
+            split_method = KFold(n_splits=n_splits)
+
+        for p in range(self.min_n_components, self.max_n_components):
+            #logging.debug("word:{}, p:{}, samples: {}".format(self.this_word, p, len(self.lengths)))
+
+            if n_splits < 2:  # for very small samples, skip the cross-validation
+                try:
+                    model = self.base_model(p)
+                    log_l = model.score(self.X, self.lengths)
+                    #logging.debug("word:{}, p:{}, scores: {:.2f}".format(self.this_word, p, log_l))
+                    if log_l > best_score:
+                        best_score = log_l
+                        best_num_states = p
+                except (ValueError, AttributeError):
+                    pass
+                continue
+
+            scores = []
+            for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                cv_train_x, cv_train_lengths = combine_sequences(cv_train_idx, self.sequences)
+                cv_test_x, cv_test_lengths = combine_sequences(cv_test_idx, self.sequences)
+                try:
+                    model = GaussianHMM(n_components=p, covariance_type="diag", n_iter=1000,
+                        random_state=self.random_state, verbose=False).fit(cv_train_x, cv_train_lengths)
+                    log_l = model.score(cv_test_x, cv_test_lengths)
+                    #logging.debug("word:{}, p:{}, scores: {:.2f}".format(self.this_word, p, log_l))
+                    scores.append(log_l)
+                except ValueError:
+                    continue
+
+            if len(scores) > 0:
+                average_score = np.mean(scores)
+                #logging.debug("word:{}, p:{}, average: {:.2f}".format(self.this_word, p, average_score))
+            if average_score > best_score:
+                best_score = average_score
+                best_num_states = p
+
+        #logging.debug("best: {}".format(best_score))
+        #self.verbose = True
+        return self.base_model(best_num_states)

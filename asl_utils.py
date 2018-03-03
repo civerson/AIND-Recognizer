@@ -38,6 +38,38 @@ def show_errors(guesses: list, test_set: SinglesData):
         print('{:5}: {:60}  {}'.format(video_num, ' '.join(recognized_sentence), ' '.join(correct_sentence)))
 
 
+def show_errors_lm(sentence_guesses: dict, test_set: SinglesData):
+    """ Print WER and sentence differences in tabular form
+
+    :param guesses: list of test item answers, ordered
+    :param test_set: SinglesData object
+    :return:
+        nothing returned, prints error report
+
+    WER = (S+I+D)/N  but we have no insertions or deletions for isolated words so WER = S/N
+    """
+    S = 0
+    N = 0
+    for video_num in test_set.sentences_index:
+        correct_sentence = [test_set.wordlist[i] for i in test_set.sentences_index[video_num]]
+        recognized_sentence = sentence_guesses[video_num]
+        for i in range(len(recognized_sentence)):
+            N += 1
+            if recognized_sentence[i] != correct_sentence[i]:
+                S += 1
+
+    print("\n**** WER = {}".format(float(S) / float(N)))
+    print("Total correct: {} out of {}".format(N - S, N))
+    print('Video  Recognized                                                    Correct')
+    print('=====================================================================================================')
+    for video_num in test_set.sentences_index:
+        correct_sentence = [test_set.wordlist[i] for i in test_set.sentences_index[video_num]]
+        recognized_sentence = sentence_guesses[video_num]
+        for i in range(len(recognized_sentence)):
+            if recognized_sentence[i] != correct_sentence[i]:
+                recognized_sentence[i] = '*' + recognized_sentence[i]
+        print('{:5}: {:60}  {}'.format(video_num, ' '.join(recognized_sentence), ' '.join(correct_sentence)))
+
 def getKey(item):
     return item[1]
 
